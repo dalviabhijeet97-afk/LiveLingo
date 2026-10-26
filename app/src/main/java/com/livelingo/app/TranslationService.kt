@@ -229,24 +229,34 @@ class TranslationService : Service() {
                         override fun onError(error: Int) {
                             recognitionStarting = false
                             if (!enabled) return
-                            val delay = when (error) {
-                                SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> 1200L
+                            // Recreate the recognizer after errors; Android speech services can
+                            // leave the old instance busy or unusable.
+                            recreateRecognizer()
+                            restartAttempts = (restartAttempts + 1).coerceAtMost(6)
+                            val baseDelay = when (error) {
                                 SpeechRecognizer.ERROR_NO_MATCH,
-                                SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> 350L
-                                else -> 900L
+                                SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> 700L
+                                SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> 1500L
+                                else -> 1000L
                             }
-                            setStatus("Listening will resume (recognizer code $error)…")
+                            val delay = (baseDelay * (1L shl (restartAttempts - 1))).coerceAtMost(15000L)
+                            setStatus("Speech service paused (code $error). Retrying in ${delay / 1000}s…")
                             scheduleRestart(delay)
                         }
                         override fun onResults(results: Bundle?) {
                             recognitionStarting = false
                             val text = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
                             if (!text.isNullOrBlank()) processSpeech(text)
-                            scheduleRestart(250)
+                            restartAttempts = 0
+                            scheduleRestart(500)
                         }
                         override fun onPartialResults(partialResults: Bundle?) {
+                            // Show the changing source hypothesis, but translate only final results.
+                            // Translating every partial result creates stale queued captions and flicker.
                             val text = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
-                            if (!text.isNullOrBlank()) processSpeech(text)
+                            if (enabled && !text.isNullOrBlank()) {
+                                japaneseText?.text = "日本語: $text"
+                            }
                         }
                         override fun onEvent(eventType: Int, params: Bundle?) = Unit
                     })
@@ -342,9 +352,13 @@ class TranslationService : Service() {
     override fun onDestroy() {
         enabled = false
         handler.removeCallbacksAndMessages(null)
+        try { recognizer?.cancel() } catch (_: Exception) {}
         try { recognizer?.destroy() } catch (_: Exception) {}
+        recognizer = null
         translator?.close()
+        translator = null
         try { overlay?.let { windowManager?.removeView(it) } } catch (_: Exception) {}
+        overlay = null
         super.onDestroy()
     }
 }
