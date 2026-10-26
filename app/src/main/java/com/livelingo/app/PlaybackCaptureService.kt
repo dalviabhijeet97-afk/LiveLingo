@@ -159,6 +159,7 @@ class PlaybackCaptureService : Service() {
 
     private fun stopCapture() {
         if (!running && audioRecord == null && projection == null) {
+            removeCaptureOverlay()
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
             return
@@ -170,6 +171,7 @@ class PlaybackCaptureService : Service() {
         try { projection?.stop() } catch (_: Exception) {}
         projection = null
         captureThread = null
+        removeCaptureOverlay()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -199,14 +201,6 @@ class PlaybackCaptureService : Service() {
         if (!android.provider.Settings.canDrawOverlays(this)) return
         if (overlayView != null) { updateOverlay(message); return }
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
-        val label = TextView(this).apply {
-            text = message
-            textSize = 14f
-            setTextColor(Color.WHITE)
-            setPadding(24, 18, 24, 18)
-            setBackgroundColor(Color.rgb(25, 31, 46))
-            maxLines = 3
-        }
         val params = WindowManager.LayoutParams(
             (resources.displayMetrics.widthPixels - 32).coerceAtLeast(260),
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -214,6 +208,44 @@ class PlaybackCaptureService : Service() {
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT
         ).apply { gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL; y = 90 }
+        val label = TextView(this).apply {
+            text = message
+            textSize = 14f
+            setTextColor(Color.WHITE)
+            setPadding(24, 18, 24, 18)
+            setBackgroundColor(Color.rgb(25, 31, 46))
+            maxLines = 3
+            contentDescription = "LiveLingo audio status. Drag to move."
+            setOnTouchListener(object : View.OnTouchListener {
+                private var downRawX = 0f
+                private var downRawY = 0f
+                private var startX = 0
+                private var startY = 0
+
+                override fun onTouch(view: View, event: MotionEvent): Boolean {
+                    when (event.action) {
+                        MotionEvent.ACTION_DOWN -> {
+                            downRawX = event.rawX
+                            downRawY = event.rawY
+                            startX = params.x
+                            startY = params.y
+                            return true
+                        }
+                        MotionEvent.ACTION_MOVE -> {
+                            params.gravity = Gravity.TOP or Gravity.START
+                            params.x = startX + (event.rawX - downRawX).toInt()
+                            params.y = startY + (event.rawY - downRawY).toInt()
+                            try { windowManager?.updateViewLayout(view, params) } catch (e: Exception) {
+                                Log.w(TAG, "Could not move capture overlay", e)
+                            }
+                            return true
+                        }
+                        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> return true
+                    }
+                    return false
+                }
+            })
+        }
         try {
             windowManager?.addView(label, params)
             overlayView = label
@@ -245,6 +277,7 @@ class PlaybackCaptureService : Service() {
         audioRecord = null
         try { projection?.stop() } catch (_: Exception) {}
         projection = null
+        removeCaptureOverlay()
         super.onDestroy()
     }
 }
