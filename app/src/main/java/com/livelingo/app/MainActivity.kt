@@ -24,6 +24,9 @@ class MainActivity : Activity() {
     }
 
     private lateinit var statusView: TextView
+    private var modelsReady = false
+    @Volatile private var preparedEngine: JapaneseCaptionEngine? = null
+    @Volatile private var engineCloseAfterPrepare = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -44,21 +47,67 @@ class MainActivity : Activity() {
         layout.addView(label("LiveLingo", 32f, Color.WHITE))
         layout.addView(label("Japanese → English\nInternal audio path\nVersion 0.5.0 prototype", 18f, Color.LTGRAY))
         statusView = label(
-            "LiveLingo captures supported app playback audio, recognizes Japanese speech, and translates it into English captions. First launch downloads the Japanese speech model; keep internet enabled for setup.",
+            "Prepare the models before starting. Speech model: Vosk Japanese vosk-model-ja-0.22 (download size shown during setup). Translation: Google ML Kit Japanese → English. Both must be ready before audio capture can start.",
             15f, Color.rgb(100, 230, 130)
         )
         layout.addView(statusView)
         val info = label(
-            "Captions appear after a complete Japanese phrase is recognized. First use downloads a Japanese speech model and the English translation model, so setup can take a few minutes. Keep internet enabled during first setup. Android 10+ is required and some apps block playback capture. Android requires RECORD_AUDIO permission as a system prerequisite; the playback-capture path uses internal audio, not microphone input.",
+            "Step 1: tap Prepare Models and wait for both downloads to finish. Progress shows the Vosk model name and downloaded/total size when the server provides it. The model is large, so keep internet enabled and the app open. Step 2: start audio capture. Android 10+ is required; some apps block playback capture. Android requires RECORD_AUDIO permission as a system prerequisite; the app captures internal playback audio, not microphone input.",
             15f, Color.WHITE
         )
         layout.addView(ScrollView(this).apply { addView(info) },
             LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
 
-        layout.addView(Button(this).apply {
-            text = "Start Internal Audio Capture"
+        val prepareButton = Button(this).apply {
+            text = "1. Prepare / Download Models"
+            setOnClickListener {
+                isEnabled = false
+                statusView.text = "Preparing Vosk Japanese speech model and ML Kit English translation model…"
+                Thread({
+                    val engine = JapaneseCaptionEngine(
+                        this@MainActivity,
+                        onCaption = {},
+                        onStatus = { message ->
+                            runOnUiThread {
+                                statusView.text = message
+                                if (message == "Japanese speech and English translation ready.") {
+                                    modelsReady = true
+                                    prepareButton.isEnabled = false
+                                    prepareButton.text = "Models Ready"
+                                    startButton.isEnabled = true
+                                    preparedEngine?.close()
+                                    preparedEngine = null
+                                } else if (message.contains("download failed", ignoreCase = true) ||
+                                    message.contains("setup failed", ignoreCase = true)) {
+                                    prepareButton.isEnabled = true
+                                    prepareButton.text = "Retry Model Setup"
+                                }
+                            }
+                        }
+                    )
+                    preparedEngine = engine
+                    try {
+                        engine.initialize()
+                        // ML Kit completes asynchronously; close only after its ready callback.
+                    } catch (e: Exception) {
+                        engine.close()
+                        runOnUiThread {
+                            statusView.text = "Model setup failed: ${e.localizedMessage ?: "check connection and retry"}"
+                            prepareButton.isEnabled = true
+                            prepareButton.text = "Retry Model Setup"
+                        }
+                    }
+                }, "LiveLingoModelSetup").start()
+            }
+        }
+        layout.addView(prepareButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+
+        val startButton = Button(this).apply {
+            text = "2. Start Internal Audio Capture"
+            isEnabled = false
             setOnClickListener { requestPlaybackCapture() }
-        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        }
+        layout.addView(startButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
         layout.addView(Button(this).apply {
             text = "Stop Internal Audio Capture"
@@ -71,6 +120,10 @@ class MainActivity : Activity() {
     }
 
     private fun requestPlaybackCapture() {
+        if (!modelsReady) {
+            statusView.text = "Please prepare both models completely before starting live captions."
+            return
+        }
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
             statusView.text = "Internal playback capture requires Android 10 or newer."
             return
