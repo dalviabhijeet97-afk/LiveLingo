@@ -58,6 +58,12 @@ class MainActivity : Activity() {
         layout.addView(ScrollView(this).apply { addView(info) },
             LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
 
+        val startButton = Button(this).apply {
+            text = "2. Start Internal Audio Capture"
+            isEnabled = false
+            setOnClickListener { requestPlaybackCapture() }
+        }
+
         val prepareButton = Button(this).apply {
             text = "1. Prepare / Download Models"
             setOnClickListener {
@@ -102,11 +108,6 @@ class MainActivity : Activity() {
         }
         layout.addView(prepareButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
-        val startButton = Button(this).apply {
-            text = "2. Start Internal Audio Capture"
-            isEnabled = false
-            setOnClickListener { requestPlaybackCapture() }
-        }
         layout.addView(startButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
         layout.addView(Button(this).apply {
