@@ -133,9 +133,7 @@ class JapaneseCaptionEngine(
             it.isDirectory && it.name == MODEL_DIR_NAME && File(it, "conf").exists()
         } ?: throw IllegalStateException("Japanese model archive did not contain expected files")
         destination.deleteRecursively()
-        if (!modelRoot.copyRecursively(destination, overwrite = true)) {
-            throw IllegalStateException("Could not install Japanese speech model")
-        }
+        modelRoot.copyRecursively(destination, overwrite = true)
         extractRoot.deleteRecursively()
         zipFile.delete()
     }
