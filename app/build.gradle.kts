@@ -11,8 +11,8 @@ android {
         applicationId = "com.livelingo.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 6
-        versionName = "0.4.1"
+        versionCode = 7
+        versionName = "0.5.0"
     }
 
     compileOptions {
@@ -27,4 +27,5 @@ android {
 
 dependencies {
     implementation("com.google.mlkit:translate:17.0.3")
+    implementation("com.alphacephei:vosk-android:0.3.47")
 }
