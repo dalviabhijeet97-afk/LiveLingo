@@ -23,7 +23,7 @@ import android.os.SystemClock
  */
 class JapaneseCaptionEngine(
     private val context: Context,
-    private val onCaption: (String) -> Unit,
+    private val onCaption: (String, String) -> Unit,
     private val onStatus: (String) -> Unit
 ) : AutoCloseable {
     companion object {
@@ -39,9 +39,9 @@ class JapaneseCaptionEngine(
     @Volatile private var translationReady = false
     @Volatile private var lastPartialText = ""
     @Volatile private var lastPartialAt = 0L
-    @Volatile private var latestFinalText = ""
     @Volatile private var translationInFlight = false
-    @Volatile private var queuedText: String? = null
+    private val queuedFinals = java.util.ArrayDeque<String>()
+    @Volatile private var queuedPartialText: String? = null
     @Volatile private var lastFinalAt = 0L
 
     /** Call on a worker thread; first launch downloads the Japanese speech model. */
@@ -64,7 +64,7 @@ class JapaneseCaptionEngine(
             ?.addOnSuccessListener {
                 translationReady = true
                 onStatus("Japanese speech and English translation ready.")
-                queuedText?.let { pending -> translate(pending, true) }
+                drainTranslationQueue()
             }
             ?.addOnFailureListener { e ->
                 Log.e(TAG, "Could not download translation model", e)
@@ -88,7 +88,6 @@ class JapaneseCaptionEngine(
             if (r.acceptWaveForm(bytes, bytes.size)) {
                 val text = JSONObject(r.result).optString("text").trim()
                 if (text.isNotBlank()) {
-                    latestFinalText = text
                     lastPartialText = ""
                     lastFinalAt = SystemClock.elapsedRealtime()
                     translate(text, true)
@@ -118,43 +117,63 @@ class JapaneseCaptionEngine(
 
     private fun translate(japanese: String, isFinal: Boolean) {
         if (closed || japanese.isBlank()) return
-        if (!translationReady) {
-            queuedText = japanese
-            return
-        }
         synchronized(this) {
-            if (translationInFlight) {
-                // Keep only the newest hypothesis instead of building a queue.
-                queuedText = japanese
+            if (!translationReady || translationInFlight) {
+                if (isFinal) {
+                    // Never allow interim hypotheses to overwrite completed utterances.
+                    if (queuedFinals.lastOrNull() != japanese) queuedFinals.addLast(japanese)
+                    // Bound memory if speech arrives faster than translation.
+                    while (queuedFinals.size > 20) queuedFinals.removeFirst()
+                } else {
+                    queuedPartialText = japanese
+                }
                 return
             }
             translationInFlight = true
-            queuedText = null
         }
+        runTranslation(japanese, isFinal)
+    }
+
+    private fun runTranslation(japanese: String, isFinal: Boolean) {
         val t = translator
-        if (t == null) {
+        if (t == null || closed) {
             synchronized(this) { translationInFlight = false }
+            drainTranslationQueue()
             return
         }
         t.translate(japanese)
             .addOnSuccessListener { english ->
-                if (!closed && english.isNotBlank() && (isFinal || japanese == lastPartialText)) onCaption(english)
+                if (!closed && english.isNotBlank() && (isFinal || japanese == lastPartialText)) {
+                    onCaption(japanese, english)
+                }
             }
             .addOnFailureListener { e ->
                 Log.e(TAG, "Translation failed", e)
                 onStatus("Recognized Japanese, but translation failed. Check internet/model download.")
             }
             .addOnCompleteListener {
-                val next: String?
-                synchronized(this) {
-                    translationInFlight = false
-                    next = queuedText
-                    queuedText = null
-                }
-                if (!closed && next != null && next != japanese) {
-                    translate(next, next == latestFinalText)
-                }
+                synchronized(this) { translationInFlight = false }
+                drainTranslationQueue()
             }
+    }
+
+    private fun drainTranslationQueue() {
+        val next: Pair<String, Boolean>? = synchronized(this) {
+            if (closed || !translationReady || translationInFlight) return
+            val finalText = if (queuedFinals.isEmpty()) null else queuedFinals.removeFirst()
+            if (finalText != null) {
+                translationInFlight = true
+                Pair(finalText, true)
+            } else {
+                val partial = queuedPartialText
+                queuedPartialText = null
+                if (partial != null && partial == lastPartialText) {
+                    translationInFlight = true
+                    Pair(partial, false)
+                } else null
+            }
+        }
+        if (next != null) runTranslation(next.first, next.second)
     }
 
     private fun downloadAndExtractModel(destination: File) {
