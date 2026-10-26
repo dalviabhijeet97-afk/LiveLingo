@@ -42,14 +42,14 @@ class MainActivity : Activity() {
         }
 
         layout.addView(label("LiveLingo", 32f, Color.WHITE))
-        layout.addView(label("Japanese → English\nInternal audio path\nVersion 0.4.1 experimental", 18f, Color.LTGRAY))
+        layout.addView(label("Japanese → English\nInternal audio path\nVersion 0.5.0 prototype", 18f, Color.LTGRAY))
         statusView = label(
-            "Microphone translation is intentionally disabled in this test build. Start internal audio capture, approve Android's system prompt, then play media in a supported app.",
+            "LiveLingo captures supported app playback audio, recognizes Japanese speech, and translates it into English captions. First launch downloads the Japanese speech model; keep internet enabled for setup.",
             15f, Color.rgb(100, 230, 130)
         )
         layout.addView(statusView)
         val info = label(
-            "This build focuses only on direct playback audio capture. It currently checks whether audio buffers arrive; English captions are not available until the audio-buffer Japanese speech engine is integrated. Android 10+ is required. Some apps block capture. Android requires the RECORD_AUDIO permission as a system prerequisite, but LiveLingo does not use it as the source audio in this path.",
+            "Captions appear after a complete Japanese phrase is recognized. First use downloads a Japanese speech model and the English translation model, so setup can take a few minutes. Keep internet enabled during first setup. Android 10+ is required and some apps block playback capture. Android requires RECORD_AUDIO permission as a system prerequisite; the playback-capture path uses internal audio, not microphone input.",
             15f, Color.WHITE
         )
         layout.addView(ScrollView(this).apply { addView(info) },
@@ -112,7 +112,7 @@ class MainActivity : Activity() {
                 putExtra(PlaybackCaptureService.EXTRA_RESULT_DATA, data)
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent) else startService(intent)
-            statusView.text = "Capture approved. Play media in Chrome or another supported app. Check the ongoing notification for audio detection."
+            statusView.text = "Capture approved. Play Japanese media in a supported app. First-run model setup may take a few minutes; English captions should appear in the floating window once speech is recognized."
         } else {
             statusView.text = "Capture was cancelled. Nothing is being captured."
         }
