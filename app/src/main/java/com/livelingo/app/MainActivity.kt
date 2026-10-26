@@ -4,27 +4,30 @@ import android.Manifest
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.Uri
+import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
+import android.net.Uri
 import android.provider.Settings
 import android.view.Gravity
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.Spinner
+import android.widget.ArrayAdapter
 import android.widget.TextView
 import android.graphics.Color
 
 class MainActivity : Activity() {
     companion object {
         private const val AUDIO_PERMISSION_REQUEST = 1001
-        private const val OVERLAY_PERMISSION_REQUEST = 1002
+        private const val PLAYBACK_CAPTURE_REQUEST = 1003
     }
 
     private lateinit var statusView: TextView
-    private lateinit var startButton: Button
-    private var waitingForOverlayPermission = false
+    private var modelsReady = false
+    @Volatile private var preparedEngine: JapaneseCaptionEngine? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -41,80 +44,150 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER
             setPadding(8, 8, 8, 8)
         }
+
         layout.addView(label("LiveLingo", 32f, Color.WHITE))
-        layout.addView(label("Japanese → English\nLive floating subtitles\nVersion 0.3.0", 18f, Color.LTGRAY))
+        layout.addView(label("Japanese → English\nInternal audio path\nVersion 0.6.0 prototype", 18f, Color.LTGRAY))
         statusView = label(
-            "Translate Japanese speech while using other apps. Allow microphone and display-over-apps access.",
+            "Prepare the models before starting. Speech model: Vosk Japanese vosk-model-ja-0.22 (download size shown during setup). Translation: Google ML Kit Japanese → English. Both must be ready before audio capture can start.",
             15f, Color.rgb(100, 230, 130)
         )
         layout.addView(statusView)
+        layout.addView(label("Caption trade-off", 16f, Color.WHITE))
+        layout.addView(label("Fast = quicker interim guesses. Balanced = fewer updates. Accurate = wait for a complete recognized utterance.", 13f, Color.LTGRAY))
+        val captionModes = listOf("Fast", "Balanced", "Accurate")
+        val captionMode = Spinner(this).apply {
+            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, captionModes)
+            val savedMode = getSharedPreferences("livelingo_settings", MODE_PRIVATE)
+                .getString("caption_mode", "Balanced") ?: "Balanced"
+            setSelection(captionModes.indexOf(savedMode).coerceAtLeast(0))
+            onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+                override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: android.view.View?, position: Int, id: Long) {
+                    getSharedPreferences("livelingo_settings", MODE_PRIVATE).edit()
+                        .putString("caption_mode", captionModes[position]).apply()
+                }
+                override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
+            }
+        }
+        layout.addView(captionMode, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         val info = label(
-            "Important: LiveLingo listens through your microphone. Play Chrome or browser audio through the tablet speakers. Direct internal-audio capture is not supported in this version.",
+            "Step 1: tap Prepare Models and wait for both downloads to finish. Progress shows the Vosk model name and downloaded/total size when the server provides it. The model is large, so keep internet enabled and the app open. Step 2: start audio capture. Android 10+ is required; some apps block playback capture. Android requires RECORD_AUDIO permission as a system prerequisite; the app captures internal playback audio, not microphone input.",
             15f, Color.WHITE
         )
         layout.addView(ScrollView(this).apply { addView(info) },
             LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
-        startButton = Button(this).apply {
-            text = "Start Floating Translation"
-            setOnClickListener { requestPermissionsAndStart() }
+
+        val startButton = Button(this).apply {
+            text = "2. Start Internal Audio Capture"
+            isEnabled = false
+            setOnClickListener { requestPlaybackCapture() }
         }
-        layout.addView(startButton, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-        ))
-        val stopButton = Button(this).apply {
-            text = "Stop Translation"
+
+        lateinit var prepareButton: Button
+        prepareButton = Button(this).apply {
+            text = "1. Prepare / Download Models"
             setOnClickListener {
-                stopService(Intent(this@MainActivity, TranslationService::class.java).setAction(TranslationService.ACTION_STOP))
-                statusView.text = "Translation stopped."
+                isEnabled = false
+                statusView.text = "Preparing Vosk Japanese speech model and ML Kit English translation model…"
+                Thread({
+                    val engine = JapaneseCaptionEngine(
+                        this@MainActivity,
+                        onCaption = { _, _ -> },
+                        onStatus = { message ->
+                            runOnUiThread {
+                                statusView.text = message
+                                if (message == "Japanese speech and English translation ready.") {
+                                    modelsReady = true
+                                    prepareButton.isEnabled = false
+                                    prepareButton.text = "Models Ready"
+                                    startButton.isEnabled = true
+                                    preparedEngine?.close()
+                                    preparedEngine = null
+                                } else if (message.contains("download failed", ignoreCase = true) ||
+                                    message.contains("setup failed", ignoreCase = true)) {
+                                    prepareButton.isEnabled = true
+                                    prepareButton.text = "Retry Model Setup"
+                                }
+                            }
+                        }
+                    )
+                    preparedEngine = engine
+                    try {
+                        engine.initialize()
+                        // ML Kit completes asynchronously; close only after its ready callback.
+                    } catch (e: Exception) {
+                        engine.close()
+                        runOnUiThread {
+                            statusView.text = "Model setup failed: ${e.localizedMessage ?: "check connection and retry"}"
+                            prepareButton.isEnabled = true
+                            prepareButton.text = "Retry Model Setup"
+                        }
+                    }
+                }, "LiveLingoModelSetup").start()
             }
         }
-        layout.addView(stopButton)
+        layout.addView(prepareButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+
+        layout.addView(startButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+
+        layout.addView(Button(this).apply {
+            text = "Stop Internal Audio Capture"
+            setOnClickListener {
+                stopService(Intent(this@MainActivity, PlaybackCaptureService::class.java).setAction(PlaybackCaptureService.ACTION_STOP))
+                statusView.text = "Internal audio capture stopped."
+            }
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         setContentView(layout)
     }
 
-    private fun requestPermissionsAndStart() {
+    private fun requestPlaybackCapture() {
+        if (!modelsReady) {
+            statusView.text = "Please prepare both models completely before starting live captions."
+            return
+        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            statusView.text = "Internal playback capture requires Android 10 or newer."
+            return
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
+            statusView.text = "Allow Display over other apps, then tap Start Internal Audio Capture again."
+            startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
+            return
+        }
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), AUDIO_PERMISSION_REQUEST)
             return
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
-            waitingForOverlayPermission = true
-            statusView.text = "Enable 'Display over other apps' for LiveLingo, then return here and tap Start again."
-            val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))
-            startActivityForResult(intent, OVERLAY_PERMISSION_REQUEST)
-            return
-        }
-        startTranslationService()
-    }
-
-    private fun startTranslationService() {
-        waitingForOverlayPermission = false
-        val intent = Intent(this, TranslationService::class.java).setAction(TranslationService.ACTION_START)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent) else startService(intent)
-        statusView.text = "Translation started. A floating subtitle bar should appear over other apps."
+        val manager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        statusView.text = "Approve the Android system capture prompt. Then play media in a supported app."
+        @Suppress("DEPRECATION")
+        startActivityForResult(manager.createScreenCaptureIntent(), PLAYBACK_CAPTURE_REQUEST)
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == AUDIO_PERMISSION_REQUEST) {
-            if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                requestPermissionsAndStart()
+            statusView.text = if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                "Permission granted. Tap Start Internal Audio Capture again."
             } else {
-                statusView.text = "Microphone permission is required."
+                "Android requires this permission for playback capture setup. The microphone is not used as the audio source."
             }
         }
     }
 
-    @Deprecated("Deprecated by Android; retained for compatibility with older devices")
+    @Deprecated("Retained for compatibility with the current project structure")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == OVERLAY_PERMISSION_REQUEST) {
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(this)) {
-                statusView.text = "Overlay permission granted. Tap Start Floating Translation."
-            } else {
-                statusView.text = "Overlay permission was not granted. Floating subtitles need this permission."
+        if (requestCode != PLAYBACK_CAPTURE_REQUEST) return
+        if (resultCode == RESULT_OK && data != null) {
+            val intent = Intent(this, PlaybackCaptureService::class.java).apply {
+                action = PlaybackCaptureService.ACTION_START
+                putExtra(PlaybackCaptureService.EXTRA_RESULT_CODE, resultCode)
+                putExtra(PlaybackCaptureService.EXTRA_RESULT_DATA, data)
             }
-            waitingForOverlayPermission = false
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent) else startService(intent)
+            statusView.text = "Capture approved. Play Japanese media in a supported app. First-run model setup may take a few minutes; English captions should appear in the floating window once speech is recognized."
+        } else {
+            statusView.text = "Capture was cancelled. Nothing is being captured."
         }
     }
 }
