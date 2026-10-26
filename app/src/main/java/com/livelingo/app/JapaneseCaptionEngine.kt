@@ -193,9 +193,14 @@ class JapaneseCaptionEngine(
             connection.disconnect()
         }
 
+        // The percentage can reach 100% before the final read completes due to rounding.
+        // Switch phases immediately after download, so extraction never looks like a frozen download.
+        onStatus("Download finished (${String.format(java.util.Locale.US, "%.1f MB", zipFile.length() / (1024.0 * 1024.0))}). Extracting Vosk Japanese model…")
         val extractRoot = File(context.filesDir, "vosk-model-extract")
         extractRoot.deleteRecursively()
         extractRoot.mkdirs()
+        var extractedBytes = 0L
+        var entriesProcessed = 0
         ZipInputStream(BufferedInputStream(zipFile.inputStream())).use { zip ->
             var entry = zip.nextEntry
             while (entry != null) {
@@ -203,15 +208,32 @@ class JapaneseCaptionEngine(
                 if (!out.path.startsWith(extractRoot.canonicalPath + File.separator)) {
                     throw IllegalStateException("Unsafe model archive entry")
                 }
-                if (entry.isDirectory) out.mkdirs() else {
+                if (entry.isDirectory) {
+                    out.mkdirs()
+                } else {
                     out.parentFile?.mkdirs()
-                    FileOutputStream(out).use { zip.copyTo(it) }
+                    FileOutputStream(out).use { output ->
+                        val buffer = ByteArray(64 * 1024)
+                        while (true) {
+                            val read = zip.read(buffer)
+                            if (read < 0) break
+                            output.write(buffer, 0, read)
+                            extractedBytes += read
+                            if (extractedBytes % (32L * 1024 * 1024) < read) {
+                                onStatus("Extracting Japanese model: ${String.format(java.util.Locale.US, "%.0f MB", extractedBytes / (1024.0 * 1024.0))} unpacked…")
+                            }
+                        }
+                    }
+                }
+                entriesProcessed++
+                if (entriesProcessed % 100 == 0) {
+                    onStatus("Extracting Japanese model: $entriesProcessed files processed, ${String.format(java.util.Locale.US, "%.0f MB", extractedBytes / (1024.0 * 1024.0))} unpacked…")
                 }
                 zip.closeEntry()
                 entry = zip.nextEntry
             }
         }
-        onStatus("Download complete. Extracting Vosk Japanese model…")
+        onStatus("Extraction complete. Validating Japanese speech model…")
         val modelRoot = extractRoot.walkTopDown().firstOrNull {
             it.isDirectory && it.name == MODEL_DIR_NAME && File(it, "conf").exists()
         } ?: throw IllegalStateException("Japanese model archive did not contain expected files")
