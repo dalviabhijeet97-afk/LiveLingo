@@ -229,18 +229,35 @@ class TranslationService : Service() {
                         override fun onError(error: Int) {
                             recognitionStarting = false
                             if (!enabled) return
-                            // Recreate the recognizer after errors; Android speech services can
-                            // leave the old instance busy or unusable.
-                            recreateRecognizer()
+
+                            // ERROR_NO_MATCH (7) and ERROR_SPEECH_TIMEOUT are normal during
+                            // pauses between movie dialogue. Do not destroy/recreate the
+                            // recognizer for these recoverable conditions: doing so can cause
+                            // repeated audio-session churn and make playback unstable.
+                            val recoverableSilence =
+                                error == SpeechRecognizer.ERROR_NO_MATCH ||
+                                error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT
+
+                            if (!recoverableSilence) {
+                                // Recreate only when the recognition service reports a more
+                                // serious failure or a busy client.
+                                recreateRecognizer()
+                            }
+
                             restartAttempts = (restartAttempts + 1).coerceAtMost(6)
-                            val baseDelay = when (error) {
-                                SpeechRecognizer.ERROR_NO_MATCH,
-                                SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> 700L
-                                SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> 1500L
-                                else -> 1000L
+                            val baseDelay = when {
+                                error == SpeechRecognizer.ERROR_NO_MATCH -> 1200L
+                                error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> 1500L
+                                error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> 2000L
+                                else -> 1500L
                             }
                             val delay = (baseDelay * (1L shl (restartAttempts - 1))).coerceAtMost(15000L)
-                            setStatus("Speech service paused (code $error). Retrying in ${delay / 1000}s…")
+                            val status = if (recoverableSilence) {
+                                "No clear speech detected. Listening again in ${(delay / 1000.0).toInt().coerceAtLeast(1)}s…"
+                            } else {
+                                "Speech recognition error $error. Retrying in ${(delay / 1000.0).toInt().coerceAtLeast(1)}s…"
+                            }
+                            setStatus(status)
                             scheduleRestart(delay)
                         }
                         override fun onResults(results: Bundle?) {
