@@ -49,6 +49,8 @@ class PlaybackCaptureService : Service() {
     private var overlayView: View? = null
     private var overlayText: TextView? = null
     @Volatile private var captionEngine: JapaneseCaptionEngine? = null
+    private val transcriptLines = ArrayDeque<String>()
+    @Volatile private var hasCaptions = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -236,7 +238,8 @@ class PlaybackCaptureService : Service() {
             setPadding(24, 22, 24, 22)
             minHeight = (88 * resources.displayMetrics.density).toInt()
             setBackgroundColor(Color.rgb(25, 31, 46))
-            maxLines = 5
+            maxLines = 10
+            gravity = Gravity.START or Gravity.CENTER_VERTICAL
             contentDescription = "LiveLingo audio status. Drag to move."
             setOnTouchListener(object : View.OnTouchListener {
                 private var downRawX = 0f
@@ -276,9 +279,18 @@ class PlaybackCaptureService : Service() {
     }
 
     private fun showCaption(english: String) {
-        updateOverlay(english)
+        val clean = english.trim()
+        if (clean.isBlank()) return
+        android.os.Handler(mainLooper).post {
+            if (transcriptLines.lastOrNull() != clean) {
+                transcriptLines.addLast(clean)
+                while (transcriptLines.size > 8) transcriptLines.removeFirst()
+            }
+            hasCaptions = true
+            overlayText?.text = transcriptLines.joinToString("\n")
+        }
         val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-        manager.notify(NOTIFICATION_ID, notification("English: " + english.take(120)))
+        manager.notify(NOTIFICATION_ID, notification("English: " + clean.take(120)))
     }
 
     private fun updateOverlay(message: String) {
@@ -293,7 +305,7 @@ class PlaybackCaptureService : Service() {
     }
 
     private fun updateNotification(message: String) {
-        updateOverlay(message)
+        if (!hasCaptions) updateOverlay(message)
         (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
             .notify(NOTIFICATION_ID, notification(message.take(100)))
     }
