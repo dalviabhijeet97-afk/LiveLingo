@@ -3,7 +3,7 @@ name: Build LiveLingo Android APK
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, feat/internal-audio-capture]
   pull_request:
     branches: [main]
 
@@ -71,7 +71,7 @@ jobs:
           retention-days: 7
 
       - name: Publish direct APK download
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/feat/internal-audio-capture')
         uses: softprops/action-gh-release@v2
         with:
           tag_name: apk-build-${{ github.run_number }}
