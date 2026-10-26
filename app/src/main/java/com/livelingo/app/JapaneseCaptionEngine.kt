@@ -15,6 +15,7 @@ import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.zip.ZipInputStream
+import android.os.SystemClock
 
 /**
  * Offline Japanese ASR (Vosk) with on-device Japanese -> English translation (ML Kit).
@@ -35,6 +36,12 @@ class JapaneseCaptionEngine(
     private var recognizer: Recognizer? = null
     private var translator: Translator? = null
     @Volatile private var closed = false
+    @Volatile private var translationReady = false
+    @Volatile private var lastPartialText = ""
+    @Volatile private var lastPartialAt = 0L
+    @Volatile private var latestFinalText = ""
+    @Volatile private var translationInFlight = false
+    @Volatile private var queuedText: String? = null
 
     /** Call on a worker thread; first launch downloads the Japanese speech model. */
     fun initialize() {
@@ -53,6 +60,11 @@ class JapaneseCaptionEngine(
         )
         onStatus("Japanese speech engine ready. Listening to internal audio…")
         translator?.downloadModelIfNeeded(DownloadConditions.Builder().build())
+            ?.addOnSuccessListener {
+                translationReady = true
+                onStatus("Japanese speech and English translation ready.")
+                queuedText?.let { pending -> translate(pending, true) }
+            }
             ?.addOnFailureListener { e ->
                 Log.e(TAG, "Could not download translation model", e)
                 onStatus("Speech recognition is ready; English translation model download failed. Check internet and restart.")
@@ -72,15 +84,47 @@ class JapaneseCaptionEngine(
         try {
             if (r.acceptWaveForm(bytes, bytes.size)) {
                 val text = JSONObject(r.result).optString("text").trim()
-                if (text.isNotBlank()) translate(text)
+                if (text.isNotBlank()) {
+                    latestFinalText = text
+                    lastPartialText = ""
+                    translate(text, true)
+                }
+            } else {
+                // Vosk emits partial hypotheses before it detects a pause.
+                val partial = JSONObject(r.partialResult).optString("partial").trim()
+                val now = SystemClock.elapsedRealtime()
+                if (partial.length >= 2 && partial != lastPartialText &&
+                    partial != latestFinalText && now - lastPartialAt >= 850L) {
+                    lastPartialText = partial
+                    lastPartialAt = now
+                    translate(partial, false)
+                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "ASR processing failed", e)
         }
     }
 
-    private fun translate(japanese: String) {
-        val t = translator ?: return
+    private fun translate(japanese: String, isFinal: Boolean) {
+        if (closed || japanese.isBlank()) return
+        if (!translationReady) {
+            queuedText = japanese
+            return
+        }
+        synchronized(this) {
+            if (translationInFlight) {
+                // Keep only the newest hypothesis instead of building a queue.
+                queuedText = japanese
+                return
+            }
+            translationInFlight = true
+            queuedText = null
+        }
+        val t = translator
+        if (t == null) {
+            synchronized(this) { translationInFlight = false }
+            return
+        }
         t.translate(japanese)
             .addOnSuccessListener { english ->
                 if (!closed && english.isNotBlank()) onCaption(english)
@@ -88,6 +132,17 @@ class JapaneseCaptionEngine(
             .addOnFailureListener { e ->
                 Log.e(TAG, "Translation failed", e)
                 onStatus("Recognized Japanese, but translation failed. Check internet/model download.")
+            }
+            .addOnCompleteListener {
+                val next: String?
+                synchronized(this) {
+                    translationInFlight = false
+                    next = queuedText
+                    queuedText = null
+                }
+                if (!closed && next != null && next != japanese) {
+                    translate(next, next == latestFinalText)
+                }
             }
     }
 
