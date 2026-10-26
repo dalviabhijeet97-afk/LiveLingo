@@ -3,7 +3,7 @@ name: Build LiveLingo Android APK
 on:
   workflow_dispatch:
   push:
-    branches: [main, feat/internal-audio-capture]
+    branches: [main, feat/internal-audio-capture, feat/japanese-asr-translation-prototype]
   pull_request:
     branches: [main]
 
@@ -71,7 +71,7 @@ jobs:
           retention-days: 7
 
       - name: Publish direct APK download
-        if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/feat/internal-audio-capture')
+        if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (github.ref == 'refs/heads/feat/internal-audio-capture' || github.ref == 'refs/heads/feat/japanese-asr-translation-prototype'))
         uses: softprops/action-gh-release@v2
         with:
           tag_name: apk-build-${{ github.run_number }}
@@ -80,6 +80,6 @@ jobs:
           make_latest: false
           files: app/build/outputs/apk/debug/app-debug.apk
           body: |
-            Experimental LiveLingo debug APK built from branch `${{ github.ref_name }}`.
+            LiveLingo debug APK built from branch `${{ github.ref_name }}`.
 
-            This is a direct APK download. It is an experimental build and may not yet provide translated captions from internal audio capture.
+            Japanese speech recognition and English translation are experimental. First launch downloads the Japanese model; keep internet enabled during setup. Playback capture depends on Android and the source app allowing capture.
