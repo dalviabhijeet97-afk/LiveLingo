@@ -4,9 +4,10 @@ import android.Manifest
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.Uri
+import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
+import android.net.Uri
 import android.provider.Settings
 import android.view.Gravity
 import android.view.ViewGroup
@@ -19,12 +20,10 @@ import android.graphics.Color
 class MainActivity : Activity() {
     companion object {
         private const val AUDIO_PERMISSION_REQUEST = 1001
-        private const val OVERLAY_PERMISSION_REQUEST = 1002
+        private const val PLAYBACK_CAPTURE_REQUEST = 1003
     }
 
     private lateinit var statusView: TextView
-    private lateinit var startButton: Button
-    private var waitingForOverlayPermission = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -41,80 +40,81 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER
             setPadding(8, 8, 8, 8)
         }
+
         layout.addView(label("LiveLingo", 32f, Color.WHITE))
-        layout.addView(label("Japanese → English\nLive floating subtitles\nVersion 0.3.0", 18f, Color.LTGRAY))
+        layout.addView(label("Japanese → English\nInternal audio path\nVersion 0.4.1 experimental", 18f, Color.LTGRAY))
         statusView = label(
-            "Translate Japanese speech while using other apps. Allow microphone and display-over-apps access.",
+            "Microphone translation is intentionally disabled in this test build. Start internal audio capture, approve Android's system prompt, then play media in a supported app.",
             15f, Color.rgb(100, 230, 130)
         )
         layout.addView(statusView)
         val info = label(
-            "Important: LiveLingo listens through your microphone. Play Chrome or browser audio through the tablet speakers. Direct internal-audio capture is not supported in this version.",
+            "This build focuses only on direct playback audio capture. It currently checks whether audio buffers arrive; English captions are not available until the audio-buffer Japanese speech engine is integrated. Android 10+ is required. Some apps block capture. Android requires the RECORD_AUDIO permission as a system prerequisite, but LiveLingo does not use it as the source audio in this path.",
             15f, Color.WHITE
         )
         layout.addView(ScrollView(this).apply { addView(info) },
             LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
-        startButton = Button(this).apply {
-            text = "Start Floating Translation"
-            setOnClickListener { requestPermissionsAndStart() }
-        }
-        layout.addView(startButton, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-        ))
-        val stopButton = Button(this).apply {
-            text = "Stop Translation"
+
+        layout.addView(Button(this).apply {
+            text = "Start Internal Audio Capture"
+            setOnClickListener { requestPlaybackCapture() }
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+
+        layout.addView(Button(this).apply {
+            text = "Stop Internal Audio Capture"
             setOnClickListener {
-                stopService(Intent(this@MainActivity, TranslationService::class.java).setAction(TranslationService.ACTION_STOP))
-                statusView.text = "Translation stopped."
+                stopService(Intent(this@MainActivity, PlaybackCaptureService::class.java).setAction(PlaybackCaptureService.ACTION_STOP))
+                statusView.text = "Internal audio capture stopped."
             }
-        }
-        layout.addView(stopButton)
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         setContentView(layout)
     }
 
-    private fun requestPermissionsAndStart() {
+    private fun requestPlaybackCapture() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            statusView.text = "Internal playback capture requires Android 10 or newer."
+            return
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
+            statusView.text = "Allow Display over other apps, then tap Start Internal Audio Capture again."
+            startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
+            return
+        }
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), AUDIO_PERMISSION_REQUEST)
             return
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
-            waitingForOverlayPermission = true
-            statusView.text = "Enable 'Display over other apps' for LiveLingo, then return here and tap Start again."
-            val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))
-            startActivityForResult(intent, OVERLAY_PERMISSION_REQUEST)
-            return
-        }
-        startTranslationService()
-    }
-
-    private fun startTranslationService() {
-        waitingForOverlayPermission = false
-        val intent = Intent(this, TranslationService::class.java).setAction(TranslationService.ACTION_START)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent) else startService(intent)
-        statusView.text = "Translation started. A floating subtitle bar should appear over other apps."
+        val manager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        statusView.text = "Approve the Android system capture prompt. Then play media in a supported app."
+        @Suppress("DEPRECATION")
+        startActivityForResult(manager.createScreenCaptureIntent(), PLAYBACK_CAPTURE_REQUEST)
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == AUDIO_PERMISSION_REQUEST) {
-            if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                requestPermissionsAndStart()
+            statusView.text = if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                "Permission granted. Tap Start Internal Audio Capture again."
             } else {
-                statusView.text = "Microphone permission is required."
+                "Android requires this permission for playback capture setup. The microphone is not used as the audio source."
             }
         }
     }
 
-    @Deprecated("Deprecated by Android; retained for compatibility with older devices")
+    @Deprecated("Retained for compatibility with the current project structure")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == OVERLAY_PERMISSION_REQUEST) {
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(this)) {
-                statusView.text = "Overlay permission granted. Tap Start Floating Translation."
-            } else {
-                statusView.text = "Overlay permission was not granted. Floating subtitles need this permission."
+        if (requestCode != PLAYBACK_CAPTURE_REQUEST) return
+        if (resultCode == RESULT_OK && data != null) {
+            val intent = Intent(this, PlaybackCaptureService::class.java).apply {
+                action = PlaybackCaptureService.ACTION_START
+                putExtra(PlaybackCaptureService.EXTRA_RESULT_CODE, resultCode)
+                putExtra(PlaybackCaptureService.EXTRA_RESULT_DATA, data)
             }
-            waitingForOverlayPermission = false
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent) else startService(intent)
+            statusView.text = "Capture approved. Play media in Chrome or another supported app. Check the ongoing notification for audio detection."
+        } else {
+            statusView.text = "Capture was cancelled. Nothing is being captured."
         }
     }
 }
