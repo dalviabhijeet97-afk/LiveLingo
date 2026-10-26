@@ -126,7 +126,7 @@ class PlaybackCaptureService : Service() {
             var lastStatusAt = 0L
             val engine = JapaneseCaptionEngine(
                 this,
-                onCaption = { english -> showCaption(english) },
+                onCaption = { japanese, english -> showCaption(japanese, english) },
                 onStatus = { status ->
                     updateNotification(status)
                     Log.i(TAG, status)
@@ -278,19 +278,21 @@ class PlaybackCaptureService : Service() {
         } catch (e: Exception) { Log.w(TAG, "Could not show capture overlay", e) }
     }
 
-    private fun showCaption(english: String) {
-        val clean = english.trim()
-        if (clean.isBlank()) return
+    private fun showCaption(japanese: String, english: String) {
+        val ja = japanese.trim()
+        val en = english.trim()
+        if (en.isBlank()) return
+        val caption = if (ja.isNotBlank()) "$ja\n$en" else en
         android.os.Handler(mainLooper).post {
-            if (transcriptLines.lastOrNull() != clean) {
-                transcriptLines.addLast(clean)
+            if (transcriptLines.lastOrNull() != caption) {
+                transcriptLines.addLast(caption)
                 while (transcriptLines.size > 5) transcriptLines.removeFirst()
             }
             hasCaptions = true
-            overlayText?.text = transcriptLines.joinToString("\n")
+            overlayText?.text = transcriptLines.joinToString("\n\n")
         }
         val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-        manager.notify(NOTIFICATION_ID, notification("English: " + clean.take(120)))
+        manager.notify(NOTIFICATION_ID, notification("English: " + en.take(120)))
     }
 
     private fun updateOverlay(message: String) {
