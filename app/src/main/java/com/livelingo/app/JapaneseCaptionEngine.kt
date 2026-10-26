@@ -82,22 +82,14 @@ class JapaneseCaptionEngine(
         }
         val r = recognizer ?: return
         try {
+            // Translate only finalized utterances for better accuracy. Partial hypotheses
+            // were faster but changed frequently and produced unstable English captions.
             if (r.acceptWaveForm(bytes, bytes.size)) {
                 val text = JSONObject(r.result).optString("text").trim()
                 if (text.isNotBlank()) {
                     latestFinalText = text
                     lastPartialText = ""
                     translate(text, true)
-                }
-            } else {
-                // Vosk emits partial hypotheses before it detects a pause.
-                val partial = JSONObject(r.partialResult).optString("partial").trim()
-                val now = SystemClock.elapsedRealtime()
-                if (partial.length >= 2 && partial != lastPartialText &&
-                    partial != latestFinalText && now - lastPartialAt >= 850L) {
-                    lastPartialText = partial
-                    lastPartialAt = now
-                    translate(partial, false)
                 }
             }
         } catch (e: Exception) {
