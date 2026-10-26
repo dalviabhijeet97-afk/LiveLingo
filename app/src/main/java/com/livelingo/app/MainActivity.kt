@@ -91,7 +91,7 @@ class MainActivity : Activity() {
                 Thread({
                     val engine = JapaneseCaptionEngine(
                         this@MainActivity,
-                        onCaption = {},
+                        onCaption = { _, _ -> },
                         onStatus = { message ->
                             runOnUiThread {
                                 statusView.text = message
