@@ -43,12 +43,12 @@ jobs:
 
       - name: Install Android SDK packages
         run: |
-          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+          set +o pipefail
+          yes | "$SDKMANAGER" --licenses
           "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0" "platform-tools"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
-        with:
           gradle-version: "8.9"
 
       - name: Build debug APK
