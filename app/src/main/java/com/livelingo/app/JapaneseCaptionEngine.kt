@@ -162,8 +162,32 @@ class JapaneseCaptionEngine(
             if (connection.responseCode !in 200..299) {
                 throw IllegalStateException("Model download returned HTTP ${connection.responseCode}")
             }
+            val totalBytes = connection.contentLengthLong
+            var downloadedBytes = 0L
+            var lastReportedBytes = 0L
             connection.inputStream.use { input ->
-                FileOutputStream(zipFile).use { output -> input.copyTo(output) }
+                FileOutputStream(zipFile).use { output ->
+                    val buffer = ByteArray(64 * 1024)
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read < 0) break
+                        output.write(buffer, 0, read)
+                        downloadedBytes += read
+                        if (downloadedBytes - lastReportedBytes >= 1024 * 1024 ||
+                            (totalBytes > 0 && downloadedBytes == totalBytes)) {
+                            lastReportedBytes = downloadedBytes
+                            val downloadedMb = downloadedBytes / (1024.0 * 1024.0)
+                            val totalLabel = if (totalBytes > 0) {
+                                String.format(java.util.Locale.US, "%.1f MB / %.1f MB", downloadedMb, totalBytes / (1024.0 * 1024.0))
+                            } else {
+                                String.format(java.util.Locale.US, "%.1f MB downloaded (server size unknown)", downloadedMb)
+                            }
+                            val percent = if (totalBytes > 0) " (${(downloadedBytes * 100 / totalBytes).coerceIn(0, 100)}%)" else ""
+                            onStatus("Downloading Vosk Japanese model: $totalLabel$percent")
+                        }
+                    }
+                    output.fd.sync()
+                }
             }
         } finally {
             connection.disconnect()
@@ -187,13 +211,18 @@ class JapaneseCaptionEngine(
                 entry = zip.nextEntry
             }
         }
+        onStatus("Download complete. Extracting Vosk Japanese model…")
         val modelRoot = extractRoot.walkTopDown().firstOrNull {
             it.isDirectory && it.name == MODEL_DIR_NAME && File(it, "conf").exists()
         } ?: throw IllegalStateException("Japanese model archive did not contain expected files")
         destination.deleteRecursively()
-        modelRoot.copyRecursively(destination, overwrite = true)
+        // Rename when possible to avoid copying the extracted model a second time.
+        if (!modelRoot.renameTo(destination)) {
+            modelRoot.copyRecursively(destination, overwrite = true)
+        }
         extractRoot.deleteRecursively()
         zipFile.delete()
+        onStatus("Japanese model extracted successfully.")
     }
 
     override fun close() {
