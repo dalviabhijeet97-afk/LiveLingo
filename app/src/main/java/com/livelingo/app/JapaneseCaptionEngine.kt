@@ -28,8 +28,8 @@ class JapaneseCaptionEngine(
 ) : AutoCloseable {
     companion object {
         private const val TAG = "LiveLingoASR"
-        private const val MODEL_URL = "https://alphacephei.com/vosk/models/vosk-model-small-ja-0.22.zip"
-        private const val MODEL_DIR_NAME = "vosk-model-small-ja-0.22"
+        private const val MODEL_URL = "https://alphacephei.com/vosk/models/vosk-model-ja-0.22.zip"
+        private const val MODEL_DIR_NAME = "vosk-model-ja-0.22"
     }
 
     private var model: Model? = null
@@ -42,12 +42,13 @@ class JapaneseCaptionEngine(
     @Volatile private var latestFinalText = ""
     @Volatile private var translationInFlight = false
     @Volatile private var queuedText: String? = null
+    @Volatile private var lastFinalAt = 0L
 
     /** Call on a worker thread; first launch downloads the Japanese speech model. */
     fun initialize() {
         onStatus("Preparing Japanese speech recognition (first run may download a model)…")
         val modelDir = File(context.filesDir, MODEL_DIR_NAME)
-        if (!File(modelDir, "am").exists() && !File(modelDir, "conf").exists()) {
+        if (!File(modelDir, "am").exists() || !File(modelDir, "conf").exists()) {
             downloadAndExtractModel(modelDir)
         }
         model = Model(modelDir.absolutePath)
@@ -89,7 +90,17 @@ class JapaneseCaptionEngine(
                 if (text.isNotBlank()) {
                     latestFinalText = text
                     lastPartialText = ""
+                    lastFinalAt = SystemClock.elapsedRealtime()
                     translate(text, true)
+                }
+            } else {
+                val partial = JSONObject(r.partialResult).optString("partial").trim()
+                val now = SystemClock.elapsedRealtime()
+                if (partial.length >= 4 && partial != lastPartialText &&
+                    now - lastFinalAt >= 1100L && now - lastPartialAt >= 1400L) {
+                    lastPartialText = partial
+                    lastPartialAt = now
+                    translate(partial, false)
                 }
             }
         } catch (e: Exception) {
@@ -119,7 +130,7 @@ class JapaneseCaptionEngine(
         }
         t.translate(japanese)
             .addOnSuccessListener { english ->
-                if (!closed && english.isNotBlank()) onCaption(english)
+                if (!closed && english.isNotBlank() && (isFinal || japanese == lastPartialText)) onCaption(english)
             }
             .addOnFailureListener { e ->
                 Log.e(TAG, "Translation failed", e)
