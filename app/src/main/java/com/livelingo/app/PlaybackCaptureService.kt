@@ -223,7 +223,7 @@ class PlaybackCaptureService : Service() {
         if (overlayView != null) { updateOverlay(message); return }
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         val params = WindowManager.LayoutParams(
-            (resources.displayMetrics.widthPixels - 32).coerceAtLeast(260),
+            (resources.displayMetrics.widthPixels - (16 * resources.displayMetrics.density).toInt()).coerceAtLeast(260),
             WindowManager.LayoutParams.WRAP_CONTENT,
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY else @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
@@ -231,11 +231,12 @@ class PlaybackCaptureService : Service() {
         ).apply { gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL; y = 90 }
         val label = TextView(this).apply {
             text = message
-            textSize = 14f
+            textSize = 18f
             setTextColor(Color.WHITE)
-            setPadding(24, 18, 24, 18)
+            setPadding(24, 22, 24, 22)
+            minHeight = (88 * resources.displayMetrics.density).toInt()
             setBackgroundColor(Color.rgb(25, 31, 46))
-            maxLines = 3
+            maxLines = 5
             contentDescription = "LiveLingo audio status. Drag to move."
             setOnTouchListener(object : View.OnTouchListener {
                 private var downRawX = 0f
