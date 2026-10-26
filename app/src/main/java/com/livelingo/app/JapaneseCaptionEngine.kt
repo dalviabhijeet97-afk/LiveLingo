@@ -96,8 +96,16 @@ class JapaneseCaptionEngine(
             } else {
                 val partial = JSONObject(r.partialResult).optString("partial").trim()
                 val now = SystemClock.elapsedRealtime()
-                if (partial.length >= 4 && partial != lastPartialText &&
-                    now - lastFinalAt >= 1100L && now - lastPartialAt >= 1400L) {
+                val mode = context.getSharedPreferences("livelingo_settings", Context.MODE_PRIVATE)
+                    .getString("caption_mode", "Balanced") ?: "Balanced"
+                val partialIntervalMs = when (mode) {
+                    "Fast" -> 1400L
+                    "Accurate" -> Long.MAX_VALUE // wait for Vosk to finalize the utterance
+                    else -> 2600L
+                }
+                if (partialIntervalMs != Long.MAX_VALUE && partial.length >= 4 &&
+                    partial != lastPartialText && now - lastFinalAt >= 1100L &&
+                    now - lastPartialAt >= partialIntervalMs) {
                     lastPartialText = partial
                     lastPartialAt = now
                     translate(partial, false)
