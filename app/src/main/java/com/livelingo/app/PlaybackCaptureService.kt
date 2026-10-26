@@ -14,6 +14,13 @@ import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
+import android.graphics.Color
+import android.graphics.PixelFormat
+import android.view.Gravity
+import android.view.WindowManager
+import android.view.View
+import android.view.MotionEvent
+import android.widget.TextView
 
 /**
  * Experimental internal playback capture.
@@ -38,6 +45,9 @@ class PlaybackCaptureService : Service() {
     private var captureThread: Thread? = null
     private var projection: MediaProjection? = null
     private var audioRecord: AudioRecord? = null
+    private var windowManager: WindowManager? = null
+    private var overlayView: View? = null
+    private var overlayText: TextView? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -54,6 +64,7 @@ class PlaybackCaptureService : Service() {
 
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, notification("Preparing internal audio capture"))
+        showCaptureOverlay("LiveLingo internal audio: starting…")
         val resultCode = intent?.getIntExtra(EXTRA_RESULT_CODE, 0) ?: 0
         val resultData = if (Build.VERSION.SDK_INT >= 33) {
             intent?.getParcelableExtra(EXTRA_RESULT_DATA, Intent::class.java)
@@ -184,7 +195,45 @@ class PlaybackCaptureService : Service() {
             .build()
     }
 
+    private fun showCaptureOverlay(message: String) {
+        if (!android.provider.Settings.canDrawOverlays(this)) return
+        if (overlayView != null) { updateOverlay(message); return }
+        windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+        val label = TextView(this).apply {
+            text = message
+            textSize = 14f
+            setTextColor(Color.WHITE)
+            setPadding(24, 18, 24, 18)
+            setBackgroundColor(Color.rgb(25, 31, 46))
+            maxLines = 3
+        }
+        val params = WindowManager.LayoutParams(
+            (resources.displayMetrics.widthPixels - 32).coerceAtLeast(260),
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY else @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT
+        ).apply { gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL; y = 90 }
+        try {
+            windowManager?.addView(label, params)
+            overlayView = label
+            overlayText = label
+        } catch (e: Exception) { Log.w(TAG, "Could not show capture overlay", e) }
+    }
+
+    private fun updateOverlay(message: String) {
+        android.os.Handler(mainLooper).post { overlayText?.text = message }
+    }
+
+    private fun removeCaptureOverlay() {
+        try { overlayView?.let { windowManager?.removeView(it) } } catch (_: Exception) {}
+        overlayView = null
+        overlayText = null
+        windowManager = null
+    }
+
     private fun updateNotification(message: String) {
+        updateOverlay(message)
         (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
             .notify(NOTIFICATION_ID, notification(message.take(100)))
     }
