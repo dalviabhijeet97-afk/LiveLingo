@@ -48,6 +48,7 @@ class PlaybackCaptureService : Service() {
     private var windowManager: WindowManager? = null
     private var overlayView: View? = null
     private var overlayText: TextView? = null
+    @Volatile private var captionEngine: JapaneseCaptionEngine? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -121,10 +122,26 @@ class PlaybackCaptureService : Service() {
         captureThread = Thread({
             val buffer = ShortArray(2048)
             var lastStatusAt = 0L
+            val engine = JapaneseCaptionEngine(
+                this,
+                onCaption = { english -> showCaption(english) },
+                onStatus = { status ->
+                    updateNotification(status)
+                    Log.i(TAG, status)
+                }
+            )
             try {
+                try {
+                    engine.initialize()
+                    captionEngine = engine
+                } catch (e: Exception) {
+                    Log.e(TAG, "Japanese speech engine initialization failed", e)
+                    updateNotification("Speech engine setup failed: " + (e.localizedMessage ?: "check internet and restart"))
+                }
                 while (running) {
                     val count = recorder.read(buffer, 0, buffer.size, AudioRecord.READ_BLOCKING)
                     if (count > 0) {
+                        captionEngine?.process(buffer, count)
                         var energy = 0.0
                         for (i in 0 until count) {
                             val value = buffer[i].toDouble()
@@ -134,12 +151,11 @@ class PlaybackCaptureService : Service() {
                         val now = System.currentTimeMillis()
                         if (now - lastStatusAt > 5000) {
                             lastStatusAt = now
-                            val status = if (rms > 120.0) {
-                                "Internal audio detected. Speech engine integration is next."
-                            } else {
-                                "Capturing audio; no audible media detected yet."
+                            if (captionEngine == null) {
+                                val status = if (rms > 120.0) "Audio captured; Japanese speech engine is unavailable."
+                                    else "Capturing audio; no audible media detected yet."
+                                updateNotification(status)
                             }
-                            updateNotification(status)
                             Log.d(TAG, "PCM capture count=$count rms=$rms")
                         }
                     } else if (count < 0) {
@@ -152,6 +168,9 @@ class PlaybackCaptureService : Service() {
                 Log.e(TAG, "Playback read loop failed", e)
                 updateNotification("Playback capture stopped: ${e.localizedMessage ?: "read error"}")
             } finally {
+                captionEngine?.close()
+                captionEngine = null
+                engine.close()
                 stopCapture()
             }
         }, "LiveLingoPlaybackCapture").also { it.start() }
@@ -165,6 +184,8 @@ class PlaybackCaptureService : Service() {
             return
         }
         running = false
+        try { captionEngine?.close() } catch (_: Exception) {}
+        captionEngine = null
         try { audioRecord?.stop() } catch (_: Exception) {}
         try { audioRecord?.release() } catch (_: Exception) {}
         audioRecord = null
@@ -251,6 +272,12 @@ class PlaybackCaptureService : Service() {
             overlayView = label
             overlayText = label
         } catch (e: Exception) { Log.w(TAG, "Could not show capture overlay", e) }
+    }
+
+    private fun showCaption(english: String) {
+        updateOverlay(english)
+        val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        manager.notify(NOTIFICATION_ID, notification("English: " + english.take(120)))
     }
 
     private fun updateOverlay(message: String) {
