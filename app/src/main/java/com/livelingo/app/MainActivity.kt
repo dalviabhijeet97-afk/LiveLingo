@@ -14,6 +14,8 @@ import android.view.ViewGroup
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.Spinner
+import android.widget.ArrayAdapter
 import android.widget.TextView
 import android.graphics.Color
 
@@ -44,12 +46,29 @@ class MainActivity : Activity() {
         }
 
         layout.addView(label("LiveLingo", 32f, Color.WHITE))
-        layout.addView(label("Japanese → English\nInternal audio path\nVersion 0.5.0 prototype", 18f, Color.LTGRAY))
+        layout.addView(label("Japanese → English\nInternal audio path\nVersion 0.6.0 prototype", 18f, Color.LTGRAY))
         statusView = label(
             "Prepare the models before starting. Speech model: Vosk Japanese vosk-model-ja-0.22 (download size shown during setup). Translation: Google ML Kit Japanese → English. Both must be ready before audio capture can start.",
             15f, Color.rgb(100, 230, 130)
         )
         layout.addView(statusView)
+        layout.addView(label("Caption trade-off", 16f, Color.WHITE))
+        layout.addView(label("Fast = quicker interim guesses. Balanced = fewer updates. Accurate = wait for a complete recognized utterance.", 13f, Color.LTGRAY))
+        val captionModes = listOf("Fast", "Balanced", "Accurate")
+        val captionMode = Spinner(this).apply {
+            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, captionModes)
+            val savedMode = getSharedPreferences("livelingo_settings", MODE_PRIVATE)
+                .getString("caption_mode", "Balanced") ?: "Balanced"
+            setSelection(captionModes.indexOf(savedMode).coerceAtLeast(0))
+            onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+                override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: android.view.View?, position: Int, id: Long) {
+                    getSharedPreferences("livelingo_settings", MODE_PRIVATE).edit()
+                        .putString("caption_mode", captionModes[position]).apply()
+                }
+                override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
+            }
+        }
+        layout.addView(captionMode, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         val info = label(
             "Step 1: tap Prepare Models and wait for both downloads to finish. Progress shows the Vosk model name and downloaded/total size when the server provides it. The model is large, so keep internet enabled and the app open. Step 2: start audio capture. Android 10+ is required; some apps block playback capture. Android requires RECORD_AUDIO permission as a system prerequisite; the app captures internal playback audio, not microphone input.",
             15f, Color.WHITE
