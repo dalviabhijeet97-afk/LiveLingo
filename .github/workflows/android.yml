@@ -25,11 +25,12 @@ jobs:
       - name: Set up Android SDK
         shell: bash
         run: |
+          set -e
           SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
           SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -type f -name sdkmanager 2>/dev/null | sort -V | tail -n 1)"
 
           if [ -z "$SDKMANAGER" ]; then
-            echo "::error::Android SDK manager not found"
+            echo "::error::Android SDK manager not found under $SDK_ROOT/cmdline-tools"
             exit 1
           fi
 
@@ -41,14 +42,19 @@ jobs:
 
           "$SDKMANAGER" --version
 
-      - name: Install Android SDK packages
+      - name: Accept Android SDK licenses
+        shell: bash
         run: |
-          set +o pipefail
-          yes | "$SDKMANAGER" --licenses
+          yes | "$SDKMANAGER" --licenses || true
+
+      - name: Install Android SDK packages
+        shell: bash
+        run: |
           "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0" "platform-tools"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
+        with:
           gradle-version: "8.9"
 
       - name: Build debug APK
