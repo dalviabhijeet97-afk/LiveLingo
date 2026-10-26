@@ -26,7 +26,6 @@ class MainActivity : Activity() {
     private lateinit var statusView: TextView
     private var modelsReady = false
     @Volatile private var preparedEngine: JapaneseCaptionEngine? = null
-    @Volatile private var engineCloseAfterPrepare = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -64,7 +63,8 @@ class MainActivity : Activity() {
             setOnClickListener { requestPlaybackCapture() }
         }
 
-        val prepareButton = Button(this).apply {
+        lateinit var prepareButton: Button
+        prepareButton = Button(this).apply {
             text = "1. Prepare / Download Models"
             setOnClickListener {
                 isEnabled = false
